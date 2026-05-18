@@ -2,10 +2,469 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Hello World</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+  <title>Jump Block</title>
+  <style>
+    html,
+    body {
+      margin: 0;
+      width: 100%;
+      height: 100%;
+      overflow: hidden;
+      background: #dfe8f2;
+      font-family: Arial, Helvetica, sans-serif;
+      touch-action: none;
+      user-select: none;
+    }
+
+    canvas {
+      display: block;
+      width: 100vw;
+      height: 100vh;
+      background: linear-gradient(#e8f1fb, #cddcec);
+    }
+  </style>
 </head>
 <body>
-  <h1>Hello World zc from jfw</h1>
+  <canvas id="game" aria-label="Jumping game"></canvas>
+
+  <script>
+    const canvas = document.getElementById("game");
+    const ctx = canvas.getContext("2d");
+
+    const state = {
+      dpr: 1,
+      width: 0,
+      height: 0,
+      score: 0,
+      best: Number(localStorage.getItem("jumpBlockBest") || 0),
+      platforms: [],
+      player: null,
+      cameraX: 0,
+      targetCameraX: 0,
+      charging: false,
+      chargeStart: 0,
+      charge: 0,
+      jumping: false,
+      jumpStart: 0,
+      jumpDuration: 720,
+      jumpFrom: null,
+      jumpTo: null,
+      jumpArc: 0,
+      activeIndex: 0,
+      gameOver: false,
+      gameOverAlpha: 0,
+      pointerDown: false,
+      lastTime: 0
+    };
+
+    const colors = ["#5aa9e6", "#7fc8a9", "#f6bd60", "#ef767a", "#9b8de3", "#69b3a2"];
+    const playerColor = "#343a52";
+
+    function resize() {
+      state.dpr = Math.max(1, Math.min(2, window.devicePixelRatio || 1));
+      state.width = Math.floor(window.innerWidth);
+      state.height = Math.floor(window.innerHeight);
+      canvas.width = Math.floor(state.width * state.dpr);
+      canvas.height = Math.floor(state.height * state.dpr);
+      ctx.setTransform(state.dpr, 0, 0, state.dpr, 0, 0);
+      state.targetCameraX = state.player ? state.player.x - state.width * 0.32 : 0;
+    }
+
+    function random(min, max) {
+      return min + Math.random() * (max - min);
+    }
+
+    function groundY() {
+      return state.height * 0.64;
+    }
+
+    function makePlatform(x) {
+      const width = random(76, 132);
+      const height = random(34, 58);
+      return {
+        x,
+        y: groundY(),
+        width,
+        height,
+        color: colors[Math.floor(Math.random() * colors.length)]
+      };
+    }
+
+    function addNextPlatform() {
+      const last = state.platforms[state.platforms.length - 1];
+      const gap = random(150, 285);
+      state.platforms.push(makePlatform(last.x + last.width / 2 + gap));
+    }
+
+    function resetGame() {
+      state.score = 0;
+      state.platforms = [];
+      state.platforms.push(makePlatform(160));
+      addNextPlatform();
+      addNextPlatform();
+      addNextPlatform();
+      state.activeIndex = 0;
+      const first = state.platforms[0];
+      state.player = {
+        x: first.x,
+        y: first.y - first.height - 27,
+        width: 32,
+        height: 54,
+        squash: 1,
+        rotation: 0
+      };
+      state.cameraX = 0;
+      state.targetCameraX = 0;
+      state.charging = false;
+      state.charge = 0;
+      state.jumping = false;
+      state.gameOver = false;
+      state.gameOverAlpha = 0;
+      state.pointerDown = false;
+    }
+
+    function worldToScreenX(x) {
+      return x - state.cameraX;
+    }
+
+    function drawPlatform(platform) {
+      const x = worldToScreenX(platform.x - platform.width / 2);
+      const y = platform.y - platform.height;
+      const w = platform.width;
+      const h = platform.height;
+      const top = h * 0.45;
+
+      ctx.save();
+      ctx.shadowColor = "rgba(43, 58, 79, 0.22)";
+      ctx.shadowBlur = 16;
+      ctx.shadowOffsetY = 12;
+      ctx.fillStyle = "rgba(50, 66, 88, 0.16)";
+      ctx.beginPath();
+      ctx.ellipse(x + w / 2, platform.y + 12, w * 0.62, 15, 0, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.shadowColor = "transparent";
+
+      ctx.fillStyle = platform.color;
+      ctx.beginPath();
+      ctx.moveTo(x + w * 0.16, y);
+      ctx.lineTo(x + w * 0.84, y);
+      ctx.lineTo(x + w, y + top);
+      ctx.lineTo(x + w * 0.5, y + top + 18);
+      ctx.lineTo(x, y + top);
+      ctx.closePath();
+      ctx.fill();
+
+      ctx.fillStyle = shade(platform.color, -24);
+      ctx.beginPath();
+      ctx.moveTo(x, y + top);
+      ctx.lineTo(x + w * 0.5, y + top + 18);
+      ctx.lineTo(x + w * 0.5, platform.y);
+      ctx.lineTo(x, platform.y - 18);
+      ctx.closePath();
+      ctx.fill();
+
+      ctx.fillStyle = shade(platform.color, -38);
+      ctx.beginPath();
+      ctx.moveTo(x + w, y + top);
+      ctx.lineTo(x + w * 0.5, y + top + 18);
+      ctx.lineTo(x + w * 0.5, platform.y);
+      ctx.lineTo(x + w, platform.y - 18);
+      ctx.closePath();
+      ctx.fill();
+
+      ctx.strokeStyle = "rgba(255,255,255,0.45)";
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.moveTo(x + w * 0.16, y);
+      ctx.lineTo(x + w * 0.84, y);
+      ctx.lineTo(x + w, y + top);
+      ctx.lineTo(x + w * 0.5, y + top + 18);
+      ctx.lineTo(x, y + top);
+      ctx.closePath();
+      ctx.stroke();
+
+      const centerX = worldToScreenX(platform.x);
+      ctx.strokeStyle = "rgba(255,255,255,0.55)";
+      ctx.lineWidth = 3;
+      ctx.beginPath();
+      ctx.arc(centerX, y + top * 0.52, Math.min(14, w * 0.16), 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.restore();
+    }
+
+    function shade(hex, amount) {
+      const n = parseInt(hex.slice(1), 16);
+      const r = Math.max(0, Math.min(255, (n >> 16) + amount));
+      const g = Math.max(0, Math.min(255, ((n >> 8) & 255) + amount));
+      const b = Math.max(0, Math.min(255, (n & 255) + amount));
+      return "#" + ((1 << 24) + (r << 16) + (g << 8) + b).toString(16).slice(1);
+    }
+
+    function drawPlayer() {
+      const p = state.player;
+      const x = worldToScreenX(p.x);
+      const y = p.y;
+      const squash = p.squash;
+      const h = p.height * squash;
+      const w = p.width * (2 - squash);
+
+      ctx.save();
+      ctx.translate(x, y + p.height);
+      ctx.rotate(p.rotation);
+      ctx.fillStyle = "rgba(35, 45, 62, 0.22)";
+      ctx.beginPath();
+      ctx.ellipse(0, 8, w * 0.62, 8, 0, 0, Math.PI * 2);
+      ctx.fill();
+
+      ctx.fillStyle = playerColor;
+      roundRect(-w / 2, -h, w, h, 8);
+      ctx.fill();
+
+      ctx.fillStyle = "#fbfaf8";
+      ctx.beginPath();
+      ctx.arc(-6, -h + 17, 3, 0, Math.PI * 2);
+      ctx.arc(6, -h + 17, 3, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.restore();
+    }
+
+    function roundRect(x, y, w, h, r) {
+      ctx.beginPath();
+      ctx.moveTo(x + r, y);
+      ctx.lineTo(x + w - r, y);
+      ctx.quadraticCurveTo(x + w, y, x + w, y + r);
+      ctx.lineTo(x + w, y + h - r);
+      ctx.quadraticCurveTo(x + w, y + h, x + w - r, y + h);
+      ctx.lineTo(x + r, y + h);
+      ctx.quadraticCurveTo(x, y + h, x, y + h - r);
+      ctx.lineTo(x, y + r);
+      ctx.quadraticCurveTo(x, y, x + r, y);
+      ctx.closePath();
+    }
+
+    function drawHud() {
+      ctx.save();
+      ctx.fillStyle = "#263244";
+      ctx.font = "700 28px Arial, Helvetica, sans-serif";
+      ctx.fillText(String(state.score), 24, 44);
+      ctx.font = "600 14px Arial, Helvetica, sans-serif";
+      ctx.fillStyle = "rgba(38, 50, 68, 0.66)";
+      ctx.fillText("BEST " + state.best, 24, 68);
+
+      if (state.charging && !state.gameOver) {
+        const barW = Math.min(240, state.width - 48);
+        const barH = 12;
+        const x = 24;
+        const y = state.height - 44;
+        ctx.fillStyle = "rgba(38, 50, 68, 0.18)";
+        roundRect(x, y, barW, barH, 6);
+        ctx.fill();
+        ctx.fillStyle = state.charge > 0.82 ? "#ef767a" : "#36a873";
+        roundRect(x, y, barW * state.charge, barH, 6);
+        ctx.fill();
+      }
+      ctx.restore();
+    }
+
+    function drawGameOver() {
+      if (!state.gameOver) {
+        return;
+      }
+      state.gameOverAlpha = Math.min(1, state.gameOverAlpha + 0.04);
+      ctx.save();
+      ctx.globalAlpha = state.gameOverAlpha;
+      ctx.fillStyle = "rgba(28, 36, 50, 0.58)";
+      ctx.fillRect(0, 0, state.width, state.height);
+
+      const panelW = Math.min(340, state.width - 36);
+      const panelH = 210;
+      const x = (state.width - panelW) / 2;
+      const y = (state.height - panelH) / 2;
+      ctx.fillStyle = "#ffffff";
+      roundRect(x, y, panelW, panelH, 12);
+      ctx.fill();
+
+      ctx.fillStyle = "#263244";
+      ctx.font = "700 30px Arial, Helvetica, sans-serif";
+      ctx.textAlign = "center";
+      ctx.fillText("Game Over", state.width / 2, y + 54);
+      ctx.font = "600 18px Arial, Helvetica, sans-serif";
+      ctx.fillText("Score " + state.score + " - Best " + state.best, state.width / 2, y + 91);
+
+      ctx.fillStyle = "#2f80ed";
+      roundRect(state.width / 2 - 72, y + 125, 144, 48, 8);
+      ctx.fill();
+      ctx.fillStyle = "#ffffff";
+      ctx.font = "700 17px Arial, Helvetica, sans-serif";
+      ctx.fillText("Restart", state.width / 2, y + 156);
+      ctx.restore();
+    }
+
+    function updateCharge(now) {
+      if (!state.charging || state.jumping || state.gameOver) {
+        state.player.squash += (1 - state.player.squash) * 0.18;
+        return;
+      }
+      const elapsed = now - state.chargeStart;
+      state.charge = Math.min(1, elapsed / 1450);
+      state.player.squash = 1 - state.charge * 0.24;
+    }
+
+    function startJump() {
+      if (!state.charging || state.jumping || state.gameOver) {
+        return;
+      }
+      state.charging = false;
+      state.jumping = true;
+      state.jumpStart = performance.now();
+      state.jumpFrom = { x: state.player.x, y: state.player.y };
+      const distance = 95 + state.charge * 330;
+      state.jumpTo = {
+        x: state.player.x + distance,
+        y: state.player.y + random(-8, 8)
+      };
+      state.jumpArc = 72 + state.charge * 120;
+      state.player.squash = 1.1;
+    }
+
+    function updateJump(now) {
+      if (!state.jumping) {
+        return;
+      }
+      const t = Math.min(1, (now - state.jumpStart) / state.jumpDuration);
+      const ease = 1 - Math.pow(1 - t, 3);
+      const arc = Math.sin(Math.PI * t) * state.jumpArc;
+      state.player.x = lerp(state.jumpFrom.x, state.jumpTo.x, ease);
+      state.player.y = lerp(state.jumpFrom.y, state.jumpTo.y, ease) - arc;
+      state.player.rotation = Math.PI * 2 * t;
+
+      if (t >= 1) {
+        state.jumping = false;
+        state.player.rotation = 0;
+        resolveLanding();
+      }
+    }
+
+    function resolveLanding() {
+      const target = state.platforms[state.activeIndex + 1];
+      const px = state.player.x;
+      const left = target.x - target.width / 2;
+      const right = target.x + target.width / 2;
+      const landed = px >= left && px <= right;
+
+      if (!landed) {
+        endGame();
+        return;
+      }
+
+      const centerDistance = Math.abs(px - target.x);
+      const centerBonus = centerDistance <= Math.max(10, target.width * 0.13);
+      state.score += centerBonus ? 3 : 1;
+      state.best = Math.max(state.best, state.score);
+      localStorage.setItem("jumpBlockBest", String(state.best));
+      state.activeIndex += 1;
+      state.player.x = target.x;
+      state.player.y = target.y - target.height - 27;
+      state.targetCameraX = state.player.x - state.width * 0.32;
+
+      while (state.platforms.length < state.activeIndex + 5) {
+        addNextPlatform();
+      }
+    }
+
+    function endGame() {
+      state.gameOver = true;
+      state.charging = false;
+      state.jumping = false;
+      state.best = Math.max(state.best, state.score);
+      localStorage.setItem("jumpBlockBest", String(state.best));
+    }
+
+    function lerp(a, b, t) {
+      return a + (b - a) * t;
+    }
+
+    function update(now) {
+      updateCharge(now);
+      updateJump(now);
+      state.cameraX += (state.targetCameraX - state.cameraX) * 0.08;
+    }
+
+    function drawBackground() {
+      ctx.clearRect(0, 0, state.width, state.height);
+      ctx.save();
+      ctx.strokeStyle = "rgba(57, 76, 105, 0.08)";
+      ctx.lineWidth = 1;
+      const spacing = 54;
+      const offset = -((state.cameraX * 0.22) % spacing);
+      for (let x = offset; x < state.width + spacing; x += spacing) {
+        ctx.beginPath();
+        ctx.moveTo(x, state.height * 0.24);
+        ctx.lineTo(x - state.height, state.height);
+        ctx.stroke();
+        ctx.beginPath();
+        ctx.moveTo(x, state.height * 0.24);
+        ctx.lineTo(x + state.height, state.height);
+        ctx.stroke();
+      }
+      ctx.restore();
+    }
+
+    function draw() {
+      drawBackground();
+      state.platforms.forEach((platform, index) => {
+        if (index >= state.activeIndex - 1) {
+          drawPlatform(platform);
+        }
+      });
+      drawPlayer();
+      drawHud();
+      drawGameOver();
+    }
+
+    function frame(now) {
+      state.lastTime = now;
+      update(now);
+      draw();
+      requestAnimationFrame(frame);
+    }
+
+    function pointerStart(event) {
+      event.preventDefault();
+      if (state.gameOver) {
+        resetGame();
+        return;
+      }
+      if (state.jumping || state.charging) {
+        return;
+      }
+      state.pointerDown = true;
+      state.charging = true;
+      state.chargeStart = performance.now();
+      state.charge = 0;
+    }
+
+    function pointerEnd(event) {
+      event.preventDefault();
+      if (!state.pointerDown) {
+        return;
+      }
+      state.pointerDown = false;
+      startJump();
+    }
+
+    window.addEventListener("resize", resize);
+    canvas.addEventListener("mousedown", pointerStart);
+    canvas.addEventListener("mouseup", pointerEnd);
+    canvas.addEventListener("mouseleave", pointerEnd);
+    canvas.addEventListener("touchstart", pointerStart, { passive: false });
+    canvas.addEventListener("touchend", pointerEnd, { passive: false });
+    canvas.addEventListener("touchcancel", pointerEnd, { passive: false });
+
+    resize();
+    resetGame();
+    requestAnimationFrame(frame);
+  </script>
 </body>
 </html>
